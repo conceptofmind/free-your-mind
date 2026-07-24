@@ -1,0 +1,1 @@
+window.location.replace("https://conceptofmind.bearblog.dev/taking-back-what-was-lost/");

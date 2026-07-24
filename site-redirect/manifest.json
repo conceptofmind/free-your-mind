@@ -17,8 +17,19 @@
   "options_page": "options.html",
   "content_scripts": [
     {
-      "matches": ["*://x.com/*", "*://www.x.com/*"],
-      "js": ["x-redirect.js"],
+      "matches": [
+        "*://x.com/*", 
+        "*://www.x.com/*", 
+        "*://facebook.com/*",
+        "*://www.facebook.com/*",
+        "*://www.reddit.com/*",
+        "*://reddit.com/*",
+        "*://youtube.com/*",
+        "*://www.youtube.com/*",
+        "*://tiktok.com/*",
+        "*://www.tiktok.com/*"
+    ],
+      "js": ["redirect.js"],
       "run_at": "document_start"
     }
   ]
