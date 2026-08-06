@@ -30,17 +30,7 @@ chrome.runtime.onInstalled.addListener(async () => {
 chrome.runtime.onStartup.addListener(rebuild);
 
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area !== "local" || !changes.blockedSites) return;
-  const oldV = changes.blockedSites.oldValue || [];
-  const newV = changes.blockedSites.newValue || [];
-  const removed = oldV.filter(s => !newV.includes(s));
-  if (removed.length) {
-    chrome.storage.local.set({
-      blockedSites: [...new Set([...newV, ...removed])]
-    });
-    return;
-  }
-  rebuild();
+  if (area === "local" && changes.blockedSites) rebuild();
 });
 
 function normalize(site) {
