@@ -1,27 +1,47 @@
-const REDIRECT_URL = "https://www.google.com/";
-let syncing = false;
+const REDIRECT_URL = "https://conceptofmind.bearblog.dev/taking-back-what-was-lost/";
+const DEFAULTS = [
+  "x.com",
+  "twitter.com",
+  "facebook.com",
+  "reddit.com",
+  "youtube.com",
+  "tiktok.com",
+  "instagram.com",
+  "spotify.com",
+  "pinterest.com"
+];
 
-chrome.runtime.onInstalled.addListener(init);
-chrome.runtime.onStartup.addListener(syncRules);
+let queue = Promise.resolve();
 
-chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === "local" && changes.blockedSites) {
-    syncRules();
-  }
+function rebuild() {
+  queue = queue.then(rebuildAll).catch(console.error);
+  return queue;
+}
+
+chrome.runtime.onInstalled.addListener(async () => {
+  const { blockedSites } = await chrome.storage.local.get("blockedSites");
+  const current = Array.isArray(blockedSites) ? blockedSites : [];
+  await chrome.storage.local.set({
+    blockedSites: [...new Set([...DEFAULTS, ...current])]
+  });
+  rebuild();
 });
 
-async function init() {
-  const { blockedSites } = await chrome.storage.local.get("blockedSites");
+chrome.runtime.onStartup.addListener(rebuild);
 
-  if (!Array.isArray(blockedSites)) {
-    await chrome.storage.local.set({
-      blockedSites: ["x.com", "twitter.com"]
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local" || !changes.blockedSites) return;
+  const oldV = changes.blockedSites.oldValue || [];
+  const newV = changes.blockedSites.newValue || [];
+  const removed = oldV.filter(s => !newV.includes(s));
+  if (removed.length) {
+    chrome.storage.local.set({
+      blockedSites: [...new Set([...newV, ...removed])]
     });
     return;
   }
-
-  await syncRules();
-}
+  rebuild();
+});
 
 function normalize(site) {
   return site
@@ -32,34 +52,54 @@ function normalize(site) {
     .replace(/\/.*$/, "");
 }
 
-async function syncRules() {
-  if (syncing) return;
-  syncing = true;
+async function rebuildAll() {
+  const { blockedSites = [] } = await chrome.storage.local.get("blockedSites");
+  const domains = [...new Set(
+    blockedSites.map(normalize).filter(s => /^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(s))
+  )];
 
-  try {
-    const { blockedSites = [] } = await chrome.storage.local.get("blockedSites");
-    const existingRules = await chrome.declarativeNetRequest.getDynamicRules();
-
-    const uniqueSites = [...new Set(blockedSites.map(normalize).filter(Boolean))];
-
-    const newRules = uniqueSites.map((site, index) => ({
-      id: index + 1,
+  const existing = await chrome.declarativeNetRequest.getDynamicRules();
+  await chrome.declarativeNetRequest.updateDynamicRules({
+    removeRuleIds: existing.map(r => r.id),
+    addRules: domains.length ? [{
+      id: 1,
       priority: 1,
-      action: {
-        type: "redirect",
-        redirect: { url: REDIRECT_URL }
-      },
-      condition: {
-        requestDomains: [site],
-        resourceTypes: ["main_frame"]
-      }
-    }));
+      action: { type: "redirect", redirect: { url: REDIRECT_URL } },
+      condition: { requestDomains: domains, resourceTypes: ["main_frame"] }
+    }] : []
+  });
 
-    await chrome.declarativeNetRequest.updateDynamicRules({
-      removeRuleIds: existingRules.map(rule => rule.id),
-      addRules: newRules
-    });
-  } finally {
-    syncing = false;
+  const scripts = await chrome.scripting.getRegisteredContentScripts({ ids: ["blocklist"] });
+  if (!domains.length) {
+    if (scripts.length) await chrome.scripting.unregisterContentScripts({ ids: ["blocklist"] });
+  } else {
+    const script = {
+      id: "blocklist",
+      js: ["redirect.js"],
+      matches: domains.flatMap(d => [`*://${d}/*`, `*://*.${d}/*`]),
+      runAt: "document_start",
+      persistAcrossSessions: true
+    };
+    if (scripts.length) await chrome.scripting.updateContentScripts([script]);
+    else await chrome.scripting.registerContentScripts([script]);
   }
+
+  await enforce(domains);
+}
+
+async function enforce(domains) {
+  if (!domains.length) return;
+  const hit = h => domains.some(d => h === d || h.endsWith("." + d));
+
+  const tabs = await chrome.tabs.query({});
+  for (const tab of tabs) {
+    try {
+      if (hit(new URL(tab.url).hostname)) chrome.tabs.update(tab.id, { url: REDIRECT_URL });
+    } catch {}
+  }
+
+  await chrome.browsingData.remove(
+    { origins: domains.flatMap(d => [`https://${d}`, `https://www.${d}`]) },
+    { serviceWorkers: true, cacheStorage: true }
+  );
 }
